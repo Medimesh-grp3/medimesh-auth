@@ -1,45 +1,5 @@
-# name: "CI — medimesh-auth"
-
-# on:
-#   push:
-#     branches: [main, feature/ci-pipeline-v3]
-#     paths:
-#       - "services/medimesh-auth/**"
-#       - ".github/workflows/ci-medimesh-auth.yml"
-#       - ".github/workflows/template-ci.yml"
-#   pull_request:
-#     branches: [main]
-#     paths:
-#       - "services/medimesh-auth/**"
-#       - ".github/workflows/ci-medimesh-auth.yml"
-#       - ".github/workflows/template-ci.yml"
-
-# permissions:
-#   contents: write
-
-# jobs:
-#   call-template:
-#     uses: ./.github/workflows/template-ci.yml
-#     with:
-#       service_name: medimesh-auth
-#       service_path: services/medimesh-auth
-#       docker_image_name: medimesh_medimesh-auth
-#       sonar_project_key: medimesh-auth
-#       node_version: "20"
-#     secrets:
-#       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-#       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-#       SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-#       SONARQUBE_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
-#       SONARQUBE_URL: ${{ secrets.SONARQUBE_URL }}
-#       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
-#       SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-#       ALERT_EMAIL: ${{ secrets.ALERT_EMAIL }}
-
-
-
 name: "CI/CD — medimesh-auth"
-run-name: "medimesh-auth — ${{ github.event.head_commit.message }} (${{ github.sha }})"
+run-name: "medimesh-auth | ${{ github.event.head_commit.message }} (${{ github.sha }})"
 
 on:
   push:
@@ -95,9 +55,23 @@ jobs:
       SMTP_PASSWORD:      ${{ secrets.SMTP_PASSWORD }}
       ALERT_EMAIL:        ${{ secrets.ALERT_EMAIL }}
 
-  # Stage 4: CD — Update ArgoCD repo → ArgoCD auto-deploys
-  deploy:
+  # Stage 4: Approval Gate — Pauses for Human Approval
+  # NOTE: No "if:" here — critical to avoid workflow parse failure
+  approval:
     needs: docker
+    uses: Medimesh-grp3/template-ci/.github/workflows/template-approval-gate.yml@main
+    with:
+      service_name: medimesh-auth
+      image_tag:    ${{ needs.docker.outputs.version }}
+      values_key:   auth
+    secrets:
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      ALERT_EMAIL:   ${{ secrets.ALERT_EMAIL }}
+
+  # Stage 5: CD — Update ArgoCD repo → ArgoCD auto-deploys
+  deploy:
+    needs: [docker, approval]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     uses: Medimesh-grp3/template-ci/.github/workflows/template-cd.yml@main
     with:
@@ -112,9 +86,9 @@ jobs:
 
   # Final: Success notification
   notify-success:
-    name: "✅ Pipeline Complete — medimesh-auth"
+    name: "Pipeline Complete — medimesh-auth"
     runs-on: ubuntu-latest
-    needs: [sonarqube, build-snyk, docker, deploy]
+    needs: [sonarqube, build-snyk, docker, approval, deploy]
     if: |
       always() &&
       needs.docker.result == 'success' &&
@@ -127,12 +101,12 @@ jobs:
           server_port: 465
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "✅ MediMesh CI/CD Passed — medimesh-auth (${{ needs.docker.outputs.version }})"
+          subject: "MediMesh CI/CD Passed — medimesh-auth (${{ needs.docker.outputs.version }})"
           to: ${{ secrets.ALERT_EMAIL }}
           from: MediMesh CI/CD Pipeline
           body: |
             ════════════════════════════════════════════════════════
-            ✅ MediMesh CI/CD Pipeline — ALL STAGES PASSED
+            MediMesh CI/CD Pipeline — ALL STAGES PASSED
             ════════════════════════════════════════════════════════
             Service : medimesh-auth
             Version : ${{ needs.docker.outputs.version }}
@@ -140,13 +114,14 @@ jobs:
             Commit  : ${{ github.sha }}
             Author  : ${{ github.actor }}
             ────────────────────────────────────────────────────────
-            ✅ ① SonarQube — Code quality passed
-            ✅ ② Build     — Dependencies installed
-            ✅ ③ Snyk      — Security scan done
-            ✅ ④ Docker    — Image built
-            ✅ ⑤ Trivy     — Container scanned
-            ✅ ⑥ Push      — Image on DockerHub
-            ✅ ⑦ CD        — ArgoCD manifest updated
+            1. SonarQube  — Code quality passed
+            2. Build      — Dependencies installed
+            3. Snyk       — Security scan done
+            4. Docker     — Image built
+            5. Trivy      — Container scanned
+            6. Push       — Image on DockerHub
+            7. Approval   — Human approved deployment
+            8. CD         — ArgoCD manifest updated
             ────────────────────────────────────────────────────────
             Image: ${{ secrets.DOCKERHUB_USERNAME }}/medimesh_medimesh-auth:${{ needs.docker.outputs.version }}
             ArgoCD is now deploying to cluster automatically.
